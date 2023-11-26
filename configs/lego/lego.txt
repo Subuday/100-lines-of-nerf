@@ -1,0 +1,10 @@
+data_dir = ./data/lego
+
+learning_rate_decay_steps = 500
+
+num_coarse_samples = 64
+num_fine_samples = 128
+
+batch_size_random_rays = 1024
+
+use_reduced_resolution = True
