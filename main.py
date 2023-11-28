@@ -85,6 +85,24 @@ def load_data():
     }
 
 
+def create_rays(h, w, ict, c2w):
+    i, j = torch.meshgrid(
+        torch.linspace(0, w - 1, w),
+        torch.linspace(0, h - 1, h)
+    )
+    i = i.t()
+    j = j.t()
+
+    normalized_pixel_directions = torch.stack(
+        [(i - ict[0][2]) / ict[0][0], -(j - ict[1][2]) / ict[1][1], -torch.ones_like(i)],
+        -1
+    )
+    rays_d = torch.sum(normalized_pixel_directions[..., np.newaxis, :] * c2w[:3, :3], -1)
+    rays_o = c2w[:3, -1].expand(rays_d.shape)
+
+    return rays_o, rays_d
+
+
 if __name__ == '__main__':
     args = parse_args()
     images, transformations, camera_poses, hwf, splits = load_data()
