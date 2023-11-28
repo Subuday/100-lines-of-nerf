@@ -5,6 +5,7 @@ import os
 import cv2
 import numpy as np
 import torch
+from tqdm import trange
 
 
 def create_parser():
@@ -103,8 +104,43 @@ def create_rays(h, w, ict, c2w):
     return rays_o, rays_d
 
 
+def train():
+    data = load_data()
+    images = data['images']
+    camera_to_world_transformations = data['camera_to_world_transformations']
+    h, w, focal = data['hwf']
+    split_train, split_val, split_test = data['splits']
+
+    intrinsic_camera_transformation = torch.tensor([
+        [focal, 0, 0.5 * w],
+        [0, focal, 0.5 * h],
+        [0, 0, 1]
+    ])
+
+    start = 1
+    iters = 200_000 + 1
+    for i in trange(start, iters):
+        selected_index = np.random.choice(split_train)
+        image = torch.tensor(images[selected_index])
+        camera_to_world_transformation = torch.tensor(camera_to_world_transformations[selected_index])
+
+        coords = torch.stack(
+            torch.meshgrid(
+                torch.linspace(0, h - 1, h, dtype=torch.int),
+                torch.linspace(0, w - 1, w, dtype=torch.int)
+            ),
+            -1
+        )
+        coords = torch.reshape(coords, [-1, 2])
+        selected_indices = np.random.choice(coords.shape[0], size=[args.batch_size_random_rays], replace=False)
+        selected_coords = coords[selected_indices]
+
+        rays_o, rays_d = create_rays(h, w, intrinsic_camera_transformation, camera_to_world_transformation)
+        rays_o = rays_o[selected_coords[:, 0], selected_coords[:, 1]]
+        rays_d = rays_d[selected_coords[:, 0], selected_coords[:, 1]]
+        batch_rays = torch.stack([rays_o, rays_d], 0)
+
+
 if __name__ == '__main__':
     args = parse_args()
-    images, transformations, camera_poses, hwf, splits = load_data()
-
-    pass
+    train()
