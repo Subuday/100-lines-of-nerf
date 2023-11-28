@@ -35,7 +35,7 @@ def load_data():
             metas[split] = json.load(fp)
 
     images = []
-    transformations = []
+    camera_to_world_transformations = []
     counts = [0]
     for split in splits:
         meta = metas[split]
@@ -54,55 +54,16 @@ def load_data():
         images.append(slit_images)
 
         split_transformations = np.array(split_transformations).astype(np.float32)
-        transformations.append(split_transformations)
+        camera_to_world_transformations.append(split_transformations)
 
         counts.append(counts[-1] + len(slit_images))
 
     images = np.concatenate(images, 0)
-    transformations = np.concatenate(transformations, 0)
+    camera_to_world_transformations = np.concatenate(camera_to_world_transformations, 0)
 
     h, w = images[0].shape[:2]
     camera_angle_x = float(meta['camera_angle_x'])
     focal = .5 * w / np.tan(.5 * camera_angle_x)
-
-    def camera2WorldTransformation(theta, phi, radius):
-        def translate(t):
-            return torch.Tensor([
-                [1, 0, 0, 0],
-                [0, 1, 0, 0],
-                [0, 0, 1, t],
-                [0, 0, 0, 1]
-            ]).float()
-
-        c2w = translate(radius)
-
-        def rotate_phi(ph):
-            return torch.Tensor([
-                [1, 0, 0, 0],
-                [0, np.cos(ph), -np.sin(ph), 0],
-                [0, np.sin(ph), np.cos(ph), 0],
-                [0, 0, 0, 1]
-            ]).float()
-
-        c2w = rotate_phi(phi / 180. * np.pi) @ c2w
-
-        def rotate_theta(th):
-            return torch.Tensor([
-                [np.cos(th), 0, -np.sin(th), 0],
-                [0, 1, 0, 0],
-                [np.sin(th), 0, np.cos(th), 0],
-                [0, 0, 0, 1]
-            ]).float()
-
-        c2w = rotate_theta(theta / 180. * np.pi) @ c2w
-
-        c2w = torch.Tensor(np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])) @ c2w
-        return c2w
-
-    camera_poses = torch.stack(
-        [camera2WorldTransformation(angle, -30.0, 4.0) for angle in np.linspace(-180, 180, 40 + 1)[:-1]],
-        0
-    )
 
     splits = [np.arange(counts[i], counts[i + 1]) for i in range(3)]
 
@@ -118,8 +79,7 @@ def load_data():
 
     return {
         'images': images,
-        'transformations': transformations,
-        'camera_poses': camera_poses,
+        'camera_to_world_transformations': camera_to_world_transformations,
         'hwf': [int(h), int(w), focal],
         'splits': splits
     }
