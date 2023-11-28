@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 
 class Embedder:
-    def __init__(self):
-        self.functions, self.output_dim = self.create_embedding_functions()
+    def __init__(self, max_encoding_resolution):
+        self.functions, self.output_dim = self.create_embedding_functions(max_encoding_resolution)
 
-    def create_embedding_functions(self):
+    def create_embedding_functions(self, max_encoding_resolution):
         functions = []
         input_dim = 3
         output_dim = 0
@@ -15,7 +15,7 @@ class Embedder:
         functions.append(lambda x: x)
         output_dim += input_dim
 
-        positional_frequencies = 2. ** torch.linspace(0., 3, steps=4)
+        positional_frequencies = 2. ** torch.linspace(0., max_encoding_resolution - 1, steps=max_encoding_resolution)
 
         for freq in positional_frequencies:
             for p_fn in [torch.sin, torch.cos]:
