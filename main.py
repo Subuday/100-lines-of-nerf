@@ -1,5 +1,5 @@
 import json
-import imageio.v2 as imageio
+import shutil
 import configargparse
 import os
 import cv2
@@ -292,7 +292,7 @@ def train():
             param_group['lr'] = new_l_rate
 
         if step % args.step_ckpt == 0:
-            path = os.path.join("./ckpts", args.name, '{:06d}.tar'.format(step))
+            path = os.path.join(ckpts_dir, '{:06d}.tar'.format(step))
             torch.save(
                 {
                     'step': step,
@@ -326,6 +326,12 @@ if __name__ == '__main__':
     with open(log_file, 'w') as file:
         file.truncate()
     logging.basicConfig(filename=f"logs/{args.name}.txt", level=logging.INFO)
+
+    ckpts_dir = os.path.join("./ckpts")
+    if os.path.exists(ckpts_dir):
+        shutil.rmtree(ckpts_dir)
+    if not os.path.exists(ckpts_dir):
+        os.makedirs(ckpts_dir, exist_ok=True)
 
     torch.set_default_dtype(torch.float64)
     train()
