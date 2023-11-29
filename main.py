@@ -81,7 +81,7 @@ def load_data():
         images = reduced_images
 
     return {
-        'images': images,
+        'images': images[..., :3],
         'camera_to_world_transformations': camera_to_world_transformations,
         'hwf': [int(h), int(w), focal],
         'splits': splits
