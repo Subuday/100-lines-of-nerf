@@ -39,7 +39,7 @@ class NeRF(nn.Module):
 
         self.pts_linears = nn.ModuleList(
             [nn.Linear(input_ch_pts, self.w)] +
-            [nn.Linear(self.w, self.w) if i not in self.skips else nn.Linear(self.w + self.input_ch, self.w) for i in range(self.d - 1)]
+            [nn.Linear(self.w, self.w) if i not in self.skips else nn.Linear(self.w + self.input_ch_pts, self.w) for i in range(self.d - 1)]
         )
 
         self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + self.w, self.w // 2)])
