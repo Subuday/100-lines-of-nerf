@@ -7,12 +7,14 @@ import numpy as np
 import torch
 import logging
 import torch.nn.functional as F
+from tqdm import trange, tqdm
 from nerf import Embedder, NeRF, run_coarse_nerf, run_fine_nerf
 
 
 def create_parser():
     parser = configargparse.ArgumentParser()
     parser.add_argument('--config', is_config_file=True, help='config file path')
+    parser.add_argument("--name", type=str, help='experiment name')
     parser.add_argument("--data_dir", type=str, default='data/lego')
     parser.add_argument("--learning_rate_decay_steps", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
@@ -20,6 +22,10 @@ def create_parser():
     parser.add_argument("--num_fine_samples", type=int, default=0, help='number of fine samples per ray')
     parser.add_argument("--batch_size_random_rays", type=int, default=1024, help='number of random rays per batch')
     parser.add_argument("--use_reduced_resolution", action='store_true', help='use reduced resolution for training')
+
+    parser.add_argument("--step_print", type=int, default=100, help='frequency of console printout and metric loggin')
+    parser.add_argument("--step_ckpt", type=int, default=10000, help='frequency of weight ckpt saving')
+    parser.add_argument("--step_video", type=int, default=50000, help='frequency of render_poses video saving')
     return parser
 
 
@@ -216,6 +222,14 @@ def render(nerf, rays_o, rays_d, near, far, noise_std):
     return render_rays(nerf, rays_o, rays_d, ray_d_norm, near, far, noise_std)
 
 
+def mse(x1, x2):
+    return torch.mean((x1 - x2) ** 2)
+
+
+def mse2psnr(x):
+    return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+
+
 def train():
     data = load_data()
     images = data['images']
@@ -231,9 +245,12 @@ def train():
 
     nerf = create_nerf()
 
+    params = list(nerf['coarse_model'].parameters()) + list(nerf['fine_model'].parameters())
+    optimizer = torch.optim.Adam(params=params, lr=5e-4, betas=(0.9, 0.999))
+
     start = 1
     iters = 200_000 + 1
-    for i in trange(start, iters):
+    for step in trange(start, iters):
         selected_index = np.random.choice(split_train)
         image = torch.tensor(images[selected_index])
         camera_to_world_transformation = torch.tensor(camera_to_world_transformations[selected_index])
@@ -253,7 +270,50 @@ def train():
         rays_o = rays_o[selected_coords[:, 0], selected_coords[:, 1]]
         rays_d = rays_d[selected_coords[:, 0], selected_coords[:, 1]]
 
-        render(nerf, h, w, rays_o, rays_d, 2, 6)
+        rgb_map_coarse, rgb_map_fine = render(nerf, rays_o, rays_d, near=2, far=6, noise_std=0.)
+
+        optimizer.zero_grad()
+
+        image_rgb = image[selected_coords[:, 0], selected_coords[:, 1]]
+        loss_coarse = mse(rgb_map_coarse, image_rgb)
+        loss_fine = mse(rgb_map_fine, image_rgb)
+        loss = loss_coarse + loss_fine
+
+        psnr = mse2psnr(loss)
+
+        loss.backward()
+        optimizer.step()
+
+        decay_steps = args.learning_rate_decay_steps * 1000
+        decay_rate = 0.1
+        new_l_rate = args.learning_rate_decay_steps * (decay_rate ** (step / decay_steps))
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = new_l_rate
+
+        if step % args.step_ckpt == 0:
+            path = os.path.join("./ckpts", args.name, '{:06d}.tar'.format(step))
+            torch.save(
+                {
+                    'step': step,
+                    'coarse_state': nerf['coarse_model'].state_dict(),
+                    'fine_state': nerf['fine_model'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                },
+                path
+            )
+
+        if step % args.step_video == 0:
+            pass
+            # # Turn on testing mode
+            # with torch.no_grad():
+            #     rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+            # print('Done, saving', rgbs.shape, disps.shape)
+            # moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+            # imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+            # imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+
+        if step % args.step_print == 0:
+            tqdm.write(f"[TRAIN] Step: {step}; Loss: {loss.item()}; PSNR: {psnr.item()}")
 
 
 if __name__ == '__main__':
