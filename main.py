@@ -5,7 +5,7 @@ import os
 import cv2
 import numpy as np
 import torch
-from tqdm import trange
+import logging
 import torch.nn.functional as F
 from nerf import Embedder, NeRF, run_coarse_nerf, run_fine_nerf
 
@@ -199,10 +199,10 @@ def render_rays(nerf, rays_o, rays_d, views, near, far, noise_std):
     rgb_map_fine, _, _, _, _ = raw2outputs(fine_raw, sample_z_fine, rays_d, noise_std)
 
     if torch.isnan(rgb_map_coarse).any() or torch.isinf(rgb_map_coarse).any():
-        print(f"! [Numerical Error] rgb_map_coarse contains nan or inf.")
+        logging.warning(f"[Numerical Error] rgb_map_coarse contains nan or inf.")
 
     if torch.isnan(rgb_map_fine).any() or torch.isinf(rgb_map_fine).any():
-        print(f"! [Numerical Error] rgb_map_fine contains nan or inf.")
+        logging.warning(f"[Numerical Error] rgb_map_fine contains nan or inf.")
 
     return rgb_map_coarse, rgb_map_fine
 
@@ -258,4 +258,10 @@ def train():
 
 if __name__ == '__main__':
     args = parse_args()
+
+    log_file = f"logs/{args.name}.txt"
+    with open(log_file, 'w') as file:
+        file.truncate()
+    logging.basicConfig(filename=f"logs/{args.name}.txt", level=logging.INFO)
+
     train()
