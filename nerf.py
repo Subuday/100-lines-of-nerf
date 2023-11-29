@@ -70,3 +70,30 @@ class NeRF(nn.Module):
         outputs = torch.cat([rgb, alpha], -1)
 
         return outputs
+
+
+def ryn_embedding(nerf, pts, views):
+    pts_flat = torch.reshape(pts, [-1, pts.shape[-1]])
+    pts_embeddings = nerf['embedder_pts'].embedding(pts_flat)
+
+    views = views[:, None].expand(pts.shape)
+    views_flat = torch.reshape(views, [-1, views.shape[-1]])
+    views_embeddings = nerf['embedder_dirs'].embedding(views_flat)
+
+    return torch.cat([pts_embeddings, views_embeddings], -1)
+
+
+def run_coarse_nerf(nerf, pts, views):
+    embeddings = ryn_embedding(nerf, pts, views)
+    coarse_model = nerf['coarse_model']
+    outputs_flat = coarse_model(embeddings)
+    outputs = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
+    return outputs
+
+
+def run_fine_nerf(nerf, pts, views):
+    embeddings = ryn_embedding(nerf, pts, views)
+    fine_model = nerf['fine_model']
+    outputs_flat = fine_model(embeddings)
+    outputs = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
+    return outputs
