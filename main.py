@@ -7,8 +7,9 @@ import numpy as np
 import torch
 import logging
 import torch.nn.functional as F
-from tqdm import trange, tqdm
+from tqdm import trange
 from nerf import Embedder, NeRF, run_coarse_nerf, run_fine_nerf
+from PIL import Image
 
 
 def create_parser():
@@ -51,8 +52,8 @@ def load_data():
 
         slit_images = []
         for frame in meta['frames']:
-            fileName = os.path.join(args.data_dir, frame['file_path'] + '.png')
-            image = imageio.imread(fileName)
+            fileName = os.path.join(args.data_dir, split, os.path.basename(frame['file_path']) + '.png')
+            image = np.array(Image.open(fileName))
             slit_images.append(image)
 
         split_transformations = []
@@ -82,7 +83,7 @@ def load_data():
         focal = focal / 2.
 
         reduced_images = np.zeros((image.shape[0], h, w, 4))
-        for i, img in enumerate(reduced_images):
+        for i, img in enumerate(images):
             reduced_images[i] = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
         images = reduced_images
 
