@@ -313,7 +313,7 @@ def train():
             # imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
 
         if step % args.step_print == 0:
-            tqdm.write(f"[TRAIN] Step: {step}; Loss: {loss.item()}; PSNR: {psnr.item()}")
+            logging.info(f"[TRAIN] Step: {step}; Loss: {loss.item()}; PSNR: {psnr.item()}")
 
 
 if __name__ == '__main__':
