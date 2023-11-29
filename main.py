@@ -207,6 +207,15 @@ def render_rays(nerf, rays_o, rays_d, views, near, far, noise_std):
     return rgb_map_coarse, rgb_map_fine
 
 
+def render(nerf, rays_o, rays_d, near, far, noise_std):
+    ray_d_norm = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
+
+    near = near * torch.ones_like(rays_d[..., :1])
+    far = far * torch.ones_like(rays_d[..., :1])
+
+    return render_rays(nerf, rays_o, rays_d, ray_d_norm, near, far, noise_std)
+
+
 def train():
     data = load_data()
     images = data['images']
