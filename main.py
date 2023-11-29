@@ -59,10 +59,10 @@ def load_data():
         for frame in meta['frames']:
             split_transformations.append(np.array(frame['transform_matrix']))
 
-        slit_images = (np.array(slit_images) / 255.).astype(np.float32)
+        slit_images = (np.array(slit_images) / 255.).astype(np.float64)
         images.append(slit_images)
 
-        split_transformations = np.array(split_transformations).astype(np.float32)
+        split_transformations = np.array(split_transformations).astype(np.float64)
         camera_to_world_transformations.append(split_transformations)
 
         counts.append(counts[-1] + len(slit_images))
@@ -310,7 +310,6 @@ def train():
             # print('Done, saving', rgbs.shape, disps.shape)
             # moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             # imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            # imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
         if step % args.step_print == 0:
             tqdm.write(f"[TRAIN] Step: {step}; Loss: {loss.item()}; PSNR: {psnr.item()}")
@@ -319,10 +318,13 @@ def train():
 if __name__ == '__main__':
     args = parse_args()
 
+    log_dir = f"logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
     log_file = f"logs/{args.name}.txt"
     with open(log_file, 'w') as file:
         file.truncate()
     logging.basicConfig(filename=f"logs/{args.name}.txt", level=logging.INFO)
 
-    torch.set_default_dtype(torch.float32)
+    torch.set_default_dtype(torch.float64)
     train()
