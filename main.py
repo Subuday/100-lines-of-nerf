@@ -198,6 +198,12 @@ def render_rays(nerf, rays_o, rays_d, views, near, far, noise_std):
     fine_raw = run_fine_nerf(nerf, sample_points_fine, views)
     rgb_map_fine, _, _, _, _ = raw2outputs(fine_raw, sample_z_fine, rays_d, noise_std)
 
+    if torch.isnan(rgb_map_coarse).any() or torch.isinf(rgb_map_coarse).any():
+        print(f"! [Numerical Error] rgb_map_coarse contains nan or inf.")
+
+    if torch.isnan(rgb_map_fine).any() or torch.isinf(rgb_map_fine).any():
+        print(f"! [Numerical Error] rgb_map_fine contains nan or inf.")
+
     return rgb_map_coarse, rgb_map_fine
 
 
