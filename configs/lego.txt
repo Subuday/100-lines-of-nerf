@@ -1,3 +1,5 @@
+name = lego
+
 data_dir = ./data/lego
 
 learning_rate_decay_steps = 500
