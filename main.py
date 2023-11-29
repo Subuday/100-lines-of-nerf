@@ -121,6 +121,86 @@ def create_nerf():
     }
 
 
+def sample_pdf(bins, weights, N_samples, det=True):
+    # Get pdf
+    weights = weights + 1e-5  # prevent nans
+    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    cdf = torch.cumsum(pdf, -1)
+    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)  # (batch, len(bins))
+
+    # Take uniform samples
+    if det:
+        u = torch.linspace(0., 1., steps=N_samples)
+        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+    else:
+        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+
+    # Invert CDF
+    u = u.contiguous()
+    inds = torch.searchsorted(cdf, u, right=True)
+    below = torch.max(torch.zeros_like(inds - 1), inds - 1)
+    above = torch.min((cdf.shape[-1] - 1) * torch.ones_like(inds), inds)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+
+    denom = (cdf_g[..., 1] - cdf_g[..., 0])
+    denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
+    t = (u - cdf_g[..., 0]) / denom
+    samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])
+
+    return samples
+
+
+def raw2outputs(raw, z_vals, rays_d, raw_noise_std):
+    raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
+
+    # calculates the distances between these sample points along each ray,
+    # essentially telling us how far apart these samples (for color and opacity) are from each other
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+
+    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
+
+    rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
+    noise = 0.
+    if raw_noise_std > 0.:
+        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
+
+    alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:, :-1]
+    rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
+
+    depth_map = torch.sum(weights * z_vals, -1)
+    disp_map = 1. / torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
+    acc_map = torch.sum(weights, -1)
+
+    return rgb_map, disp_map, acc_map, weights, depth_map
+
+
+def render_rays(nerf, rays_o, rays_d, views, near, far, noise_std):
+    normalized_sample_position = torch.linspace(0., 1., steps=args.num_coarse_samples)
+    sample_z_coarse = near * (1. - normalized_sample_position) + far * normalized_sample_position
+    rays_num = rays_d.shape[0]
+    sample_z_coarse = sample_z_coarse.expand([rays_num, args.num_coarse_samples])
+
+    sample_points_coarse = rays_o[..., None, :] + rays_d[..., None, :] * sample_z_coarse[..., :, None]
+    coarse_raw = run_coarse_nerf(nerf, sample_points_coarse, views)
+    rgb_map_coarse, _, _, weights_coarse, _ = raw2outputs(coarse_raw, sample_z_coarse, rays_d, noise_std)
+
+    sample_z_mid = .5 * (sample_z_coarse[..., 1:] + sample_z_coarse[..., :-1])
+    sample_z_pdf = sample_pdf(sample_z_mid, weights_coarse[..., 1:-1], args.num_fine_samples)
+    sample_z_fine, _ = torch.sort(torch.cat([sample_z_coarse, sample_z_pdf], -1), -1)
+
+    sample_points_fine = rays_o[..., None, :] + rays_d[..., None, :] * sample_z_fine[..., :, None]
+    fine_raw = run_fine_nerf(nerf, sample_points_fine, views)
+    rgb_map_fine, _, _, _, _ = raw2outputs(fine_raw, sample_z_fine, rays_d, noise_std)
+
+    return rgb_map_coarse, rgb_map_fine
+
+
 def train():
     data = load_data()
     images = data['images']
@@ -133,6 +213,8 @@ def train():
         [0, focal, 0.5 * h],
         [0, 0, 1]
     ])
+
+    nerf = create_nerf()
 
     start = 1
     iters = 200_000 + 1
@@ -155,7 +237,8 @@ def train():
         rays_o, rays_d = create_rays(h, w, intrinsic_camera_transformation, camera_to_world_transformation)
         rays_o = rays_o[selected_coords[:, 0], selected_coords[:, 1]]
         rays_d = rays_d[selected_coords[:, 0], selected_coords[:, 1]]
-        batch_rays = torch.stack([rays_o, rays_d], 0)
+
+        render(nerf, h, w, rays_o, rays_d, 2, 6)
 
 
 if __name__ == '__main__':
