@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import torch
 from tqdm import trange
+import torch.nn.functional as F
+from nerf import Embedder, NeRF, run_coarse_nerf, run_fine_nerf
 
 
 def create_parser():
@@ -102,6 +104,21 @@ def create_rays(h, w, ict, c2w):
     rays_o = c2w[:3, -1].expand(rays_d.shape)
 
     return rays_o, rays_d
+
+
+def create_nerf():
+    embedder_pts = Embedder(max_encoding_resolution=10)
+    embedder_dirs = Embedder(max_encoding_resolution=4)
+
+    coarse_model = NeRF(input_ch_pts=embedder_pts.output_dim, input_ch_views=embedder_dirs.output_dim)
+    fine_model = NeRF(input_ch_pts=embedder_pts.output_dim, input_ch_views=embedder_dirs.output_dim)
+
+    return {
+        'embedder_pts': embedder_pts,
+        'embedder_dirs': embedder_dirs,
+        'coarse_model': coarse_model,
+        'fine_model': fine_model
+    }
 
 
 def train():
