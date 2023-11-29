@@ -324,4 +324,5 @@ if __name__ == '__main__':
         file.truncate()
     logging.basicConfig(filename=f"logs/{args.name}.txt", level=logging.INFO)
 
+    torch.set_default_dtype(torch.float32)
     train()
