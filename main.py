@@ -3,6 +3,7 @@ import shutil
 import configargparse
 import os
 import cv2
+import imageio
 import numpy as np
 import torch
 import logging
@@ -23,6 +24,7 @@ def create_parser():
     parser.add_argument("--num_fine_samples", type=int, default=0, help='number of fine samples per ray')
     parser.add_argument("--batch_size_random_rays", type=int, default=1024, help='number of random rays per batch')
     parser.add_argument("--use_reduced_resolution", action='store_true', help='use reduced resolution for training')
+    parser.add_argument("--render_video", action='store_true', help='render video')
 
     parser.add_argument("--step_print", type=int, default=100, help='frequency of console printout and metric loggin')
     parser.add_argument("--step_ckpt", type=int, default=10000, help='frequency of weight ckpt saving')
@@ -113,12 +115,17 @@ def create_rays(h, w, ict, c2w):
     return rays_o, rays_d
 
 
-def create_nerf():
+def create_nerf(coarse_model_state=None, fine_model_state=None):
     embedder_pts = Embedder(max_encoding_resolution=10)
     embedder_dirs = Embedder(max_encoding_resolution=4)
 
     coarse_model = NeRF(input_ch_pts=embedder_pts.output_dim, input_ch_views=embedder_dirs.output_dim)
+    if coarse_model_state is not None:
+        coarse_model.load_state_dict(coarse_model_state)
+
     fine_model = NeRF(input_ch_pts=embedder_pts.output_dim, input_ch_views=embedder_dirs.output_dim)
+    if fine_model_state is not None:
+        fine_model.load_state_dict(fine_model_state)
 
     return {
         'embedder_pts': embedder_pts,
@@ -223,12 +230,96 @@ def render(nerf, rays_o, rays_d, near, far, noise_std):
     return render_rays(nerf, rays_o, rays_d, ray_d_norm, near, far, noise_std)
 
 
+def rendering_camera_transformation(theta, phi, radius):
+    trans_t = lambda t: torch.Tensor([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, t],
+        [0, 0, 0, 1]])
+
+    rot_phi = lambda phi: torch.Tensor([
+        [1, 0, 0, 0],
+        [0, np.cos(phi), -np.sin(phi), 0],
+        [0, np.sin(phi), np.cos(phi), 0],
+        [0, 0, 0, 1]])
+
+    rot_theta = lambda th: torch.Tensor([
+        [np.cos(th), 0, -np.sin(th), 0],
+        [0, 1, 0, 0],
+        [np.sin(th), 0, np.cos(th), 0],
+        [0, 0, 0, 1]])
+
+    c2w = trans_t(radius)
+    c2w = rot_phi(phi / 180. * np.pi) @ c2w
+    c2w = rot_theta(theta / 180. * np.pi) @ c2w
+    c2w = torch.Tensor(np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])) @ c2w
+    return c2w
+
+
+def create_intrinsic_camera_transformation(h, w, focal):
+    return torch.tensor([
+        [focal, 0, 0.5 * w],
+        [0, focal, 0.5 * h],
+        [0, 0, 1]
+    ])
+
+
+def render_video():
+    ckpts_paths = []
+    for f in os.listdir(ckpts_dir):
+        if f.endswith('.tar'):
+            ckpts_paths.append(f)
+
+    ckpt = torch.load(os.path.join(ckpts_dir, ckpts_paths[-1]))
+
+    nerf = create_nerf(ckpt['coarse_state'], ckpt['fine_state'])
+
+    data = load_data()
+
+    down_sample_factor = 8
+    h, w, focal = data['hwf']
+    h = h // down_sample_factor
+    w = w // down_sample_factor
+    focal = focal / down_sample_factor
+
+    ict = create_intrinsic_camera_transformation(h, w, focal)
+
+    rendering_camera_transformations = torch.stack(
+        [rendering_camera_transformation(angle, -30.0, 4.0) for angle in np.linspace(-180, 180, 40 + 1)[:-1]],
+    )
+    rendering_camera_transformations = rendering_camera_transformations[:, :3, :4]
+
+    rgbs = []
+    for c2w in rendering_camera_transformations:
+        rays_o, rays_d = create_rays(h, w, ict, c2w)
+        rays_o = rays_o.reshape(-1, 3)
+        rays_d = rays_d.reshape(-1, 3)
+
+        _, rgb_map = render(nerf, rays_o, rays_d, near=2., far=6., noise_std=0.)
+        rgb_map = rgb_map.reshape(h, w, 3)
+
+        rgbs.append(rgb_map.detach().numpy())
+
+    rgbs = np.stack(rgbs, 0)
+
+    imageio.mimwrite(
+        os.path.join(ckpts_dir, '{}_spiral_'.format(args.name)) + 'rgb.mp4',
+        to8b(rgbs),
+        fps=30,
+        quality=8
+    )
+
+
 def mse(x1, x2):
     return torch.mean((x1 - x2) ** 2)
 
 
 def mse2psnr(x):
     return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+
+
+def to8b(x):
+    return (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
 
 def train():
@@ -238,11 +329,7 @@ def train():
     h, w, focal = data['hwf']
     split_train, split_val, split_test = data['splits']
 
-    intrinsic_camera_transformation = torch.tensor([
-        [focal, 0, 0.5 * w],
-        [0, focal, 0.5 * h],
-        [0, 0, 1]
-    ])
+    intrinsic_camera_transformation = create_intrinsic_camera_transformation(h, w, focal)
 
     nerf = create_nerf()
 
@@ -271,7 +358,7 @@ def train():
         rays_o = rays_o[selected_coords[:, 0], selected_coords[:, 1]]
         rays_d = rays_d[selected_coords[:, 0], selected_coords[:, 1]]
 
-        rgb_map_coarse, rgb_map_fine = render(nerf, rays_o, rays_d, near=2, far=6, noise_std=0.)
+        rgb_map_coarse, rgb_map_fine = render(nerf, rays_o, rays_d, near=2, far=6, noise_std=1e0)
 
         optimizer.zero_grad()
 
@@ -303,15 +390,6 @@ def train():
                 path
             )
 
-        if step % args.step_video == 0:
-            pass
-            # # Turn on testing mode
-            # with torch.no_grad():
-            #     rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
-            # print('Done, saving', rgbs.shape, disps.shape)
-            # moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
-            # imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-
         if step % args.step_print == 0:
             logging.info(f"[TRAIN] Step: {step}; Loss: {loss.item()}; PSNR: {psnr.item()}")
 
@@ -327,11 +405,16 @@ if __name__ == '__main__':
         file.truncate()
     logging.basicConfig(filename=f"logs/{args.name}.txt", level=logging.INFO)
 
-    ckpts_dir = os.path.join("./ckpts")
-    if os.path.exists(ckpts_dir):
-        shutil.rmtree(ckpts_dir)
-    if not os.path.exists(ckpts_dir):
-        os.makedirs(ckpts_dir, exist_ok=True)
-
     torch.set_default_dtype(torch.float64)
-    train()
+
+    ckpts_dir = os.path.join("./ckpts")
+
+    if args.render_video:
+        render_video()
+    else:
+        if os.path.exists(ckpts_dir):
+            shutil.rmtree(ckpts_dir)
+        if not os.path.exists(ckpts_dir):
+            os.makedirs(ckpts_dir, exist_ok=True)
+
+        train()
